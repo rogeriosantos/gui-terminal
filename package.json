@@ -1,0 +1,70 @@
+{
+  "name": "gui-terminal",
+  "productName": "GuiTerminal",
+  "version": "0.1.1001",
+  "description": "A graphical terminal: real terminals (zsh/bash/PowerShell/ssh) with a GUI around them - tabs, sidebar, split panes.",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "start": "bun run scripts/build.ts && electron .",
+    "build": "bun run scripts/build.ts",
+    "dist": "bun run scripts/build.ts && electron-builder --mac --publish never",
+    "dist:all": "bun run scripts/build.ts && electron-builder -mwl --publish never",
+    "check": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/node": "^26",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "electron": "^39",
+    "electron-builder": "^26",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "node-pty": "^1.0.0",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "build": {
+    "appId": "com.rogeriosantos.guiterminal",
+    "productName": "GuiTerminal",
+    "artifactName": "GuiTerminal-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "node_modules/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**",
+      "node_modules/spdlog/**",
+      "node_modules/@xterm/**/*.node"
+    ],
+    "electronDist": "./electron-vendor",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ]
+    },
+    "win": {
+      "target": ["nsis", "zip"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "System"
+    }
+  }
+}
