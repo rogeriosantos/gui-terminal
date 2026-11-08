@@ -291,10 +291,14 @@ export function App() {
                   <div
                     key={t.key}
                     className={"pane" + (t.key === active ? " active" : "")}
-                    style={t.key === active ? undefined : { display: "none" }}
+                    // Keep hidden tabs in the layout (visibility, not display)
+                    // so xterm keeps valid glyph metrics; display:none is what
+                    // corrupts the font atlas into "small squares".
+                    style={t.key === active ? undefined : { visibility: "hidden" }}
                   >
                     <PaneTree
                       tab={t}
+                      activeTabKey={active}
                       getSession={(paneId) => sessions.current.get(paneId) ?? null}
                       ensureSession={ensurePaneSession}
                       handles={handles.current}
@@ -323,6 +327,7 @@ const TABBAR_PAD = IS_MAC ? 78 : 0;
 
 function PaneTree({
   tab,
+  activeTabKey,
   getSession,
   ensureSession,
   handles,
@@ -333,6 +338,7 @@ function PaneTree({
   onTitle,
 }: {
   tab: Tab;
+  activeTabKey: number | null;
   getSession: (paneId: number) => Session;
   ensureSession: (paneId: number, shell: ShellKind, host?: string) => void;
   handles: Map<number, PaneHandle>;
@@ -350,7 +356,7 @@ function PaneTree({
           tab={tab}
           paneId={node.id}
           session={getSession(node.id)}
-          focused={tab.focusedPane === node.id}
+          focused={tab.focusedPane === node.id && activeTabKey === tab.key}
           ensureSession={ensureSession}
           handles={handles}
           onFocus={onFocus}

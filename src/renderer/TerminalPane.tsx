@@ -14,6 +14,8 @@ export interface PaneHandle {
   hasSelection(): boolean;
   getSelectedText(): string;
   write(data: string): void;
+  /** "none" | "x10" | "vt200" | "drag" | "any" — how the app tracks the mouse. */
+  mouseTrackingMode(): string;
 }
 
 const THEMES = {
@@ -80,6 +82,10 @@ export function TerminalPane({
       allowProposedApi: true,
       theme: THEMES.dark,
       scrollback: 5000,
+      // Option+click/drag forces local selection even when the running app
+      // (claude/codex/lucy, vim, htop) enables mouse reporting. Shift+drag
+      // works on every platform as the standard fallback.
+      macOptionClickForcesSelection: true,
     });
     const f = new FitAddon();
     t.loadAddon(f);
@@ -122,6 +128,7 @@ export function TerminalPane({
         const s = sessionRef.current;
         if (s) window.terminal.write(s.id, data);
       },
+      mouseTrackingMode: () => term.current?.modes.mouseTrackingMode ?? "none",
     };
     handles.set(paneId, handle);
     // Test/inspection surface (harmless in production).
@@ -258,6 +265,9 @@ export function TerminalPane({
       term.current?.focus();
       try {
         fit.current?.fit();
+        // Coming back from a hidden tab the glyph atlas can be stale
+        // (fonts measured at 0 size); rebuild it.
+        term.current?.clearTextureAtlas();
         const s = sessionRef.current;
         const t = term.current;
         if (s && t) window.terminal.resize(s.id, t.cols, t.rows);

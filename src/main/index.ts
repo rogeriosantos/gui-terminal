@@ -129,7 +129,31 @@ const createWindow = () => {
               : "FAIL selLen=" + selLen + " clipLen=" + clip.length),
         );
 
-        // 5. State persistence
+        // 5. Glyph integrity across tab switches: open a second tab, switch
+        //    back, and confirm the first tab's canvas still reports sane cell
+        //    dimensions (the "small squares" bug had 0-width cells).
+        win.webContents.send("menu:new-tab");
+        await new Promise((r) => setTimeout(r, 900));
+        // switch back to tab 1 (click the first tab element)
+        await q("document.querySelector('.tab')?.click()");
+        await new Promise((r) => setTimeout(r, 700));
+        // xterm 5.5 uses the DOM renderer: sanity = row height and char width.
+        const glyphInfo = await q(
+          "(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); const h = rows.length ? rows[0].getBoundingClientRect().height : -1; return rows.length + ' rows, first ' + h + 'px tall'; })()",
+        );
+        results.push(
+          "glyphs: " + (glyphInfo.includes("0px") || glyphInfo.includes("-1") ? "FAIL (" + glyphInfo + ")" : "PASS (" + glyphInfo + ")"),
+        );
+
+        // 6. Selection inside mouse-reporting apps: enable mouse tracking like
+        //    claude/codex/lucy do, then option-click select and copy.
+        ptyManager.write(first, "printf '\\e[?1000h\\e[?1006h'");
+        await new Promise((r) => setTimeout(r, 500));
+        const selMode = await q(
+          "window.__GT_PANES ? [...window.__GT_PANES.values()][0].mouseTrackingMode() : 'none'",
+        );
+
+        // 7. State persistence
         const st = await q("window.terminal.stateLoad().then(s => s ? s.tabs.length : null)");
         results.push("state: " + (Number(st) >= 1 ? "PASS (" + st + " tabs)" : "FAIL (" + st + ")"));
 
