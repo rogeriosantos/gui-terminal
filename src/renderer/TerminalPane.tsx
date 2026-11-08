@@ -133,9 +133,30 @@ export function TerminalPane({
     handles.set(paneId, handle);
     // Test/inspection surface (harmless in production).
     (window as unknown as { __GT_PANES?: Map<number, PaneHandle> }).__GT_PANES = handles;
+    const selTs = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+    if (!selTs) {
+      (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS = new Map();
+    }
 
     // Keyboard: terminal-aware copy/paste. Cmd/Ctrl+C copies when something is
-    // selected, otherwise passes through to the shell as SIGINT.
+    // selected, otherwise passes through to the shell as SIGINT. When another
+    // pane holds a FRESHER selection (user dragged there while keyboard focus
+    // stayed here), copy that one instead - the user copies what they see
+    // highlighted.
+    const freshestForeignSelection = (): { text: string } | null => {
+      const tsMap = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+      if (!tsMap) return null;
+      let best: { id: number; ts: number } | null = null;
+      for (const [id, h] of handles.entries()) {
+        if (id === paneId) continue;
+        const ts = tsMap.get(id) ?? 0;
+        if (h.hasSelection() && ts > (best?.ts ?? 0)) best = { id, ts };
+      }
+      if (!best) return null;
+      const h = handles.get(best.id);
+      const text = h?.getSelectedText() ?? "";
+      return text ? { text } : null;
+    };
     t.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
       const key = ev.key.toLowerCase();
@@ -143,6 +164,11 @@ export function TerminalPane({
         if (ev.metaKey && key === "c") {
           if (t.hasSelection()) {
             doCopy();
+            return false;
+          }
+          const foreign = freshestForeignSelection();
+          if (foreign) {
+            window.terminal.clipboardWriteText(foreign.text);
             return false;
           }
           return true; // SIGINT
@@ -202,13 +228,23 @@ export function TerminalPane({
     };
     el.addEventListener("auxclick", onAuxClick);
 
-    // Selection tracking for the context menu's Copy enabled state.
-    const refreshSel = () => setHasSel(t.hasSelection());
+    // Selection tracking for the context menu's Copy enabled state + copy
+    // routing: the pane with the FRESHEST selection wins Cmd+C (keyboard
+    // focus can sit in another pane after a split).
+    const refreshSel = () => {
+      setHasSel(t.hasSelection());
+      if (t.hasSelection()) {
+        const m = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+        m?.set(paneId, Date.now());
+      }
+    };
+    const selSub = t.onSelectionChange(refreshSel);
     el.addEventListener("mouseup", refreshSel);
     el.addEventListener("dblclick", refreshSel);
 
     return () => {
       handles.delete(paneId);
+      selSub.dispose();
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("auxclick", onAuxClick);
       el.removeEventListener("mouseup", refreshSel);
@@ -272,6 +308,10 @@ export function TerminalPane({
         const t = term.current;
         if (s && t) window.terminal.resize(s.id, t.cols, t.rows);
       } catch {}
+    } else {
+      // Losing keyboard focus also gives up the selection: a stale selection
+      // in an unfocused pane is what Cmd+C wrongly copied.
+      term.current?.clearSelection();
     }
   }, [focused, session?.id]);
 

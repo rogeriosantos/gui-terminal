@@ -225,6 +225,116 @@ const createWindow = () => {
           console.log("KEYPROBE sel=" + selLen2 + " seen=" + seenKeys + " clipKey=" + clipLen + " clipMenu=" + clipMenu + " xtermStillSel=" + xtermSel);
         }
 
+        // 10. REAL-USER keyboard test via macOS CGEvent synthesis (osascript),
+        //     same event path as fingers on a real keyboard.
+        if (process.env.GT_REALKEYS) {
+          const { execFile } = await import("node:child_process");
+          // Bring our window to the front so System Events delivers keys to it.
+          await new Promise<void>((res) =>
+            execFile("osascript", ["-e", `tell application "System Events" to set frontmost of process "Electron" to true`], () => res()),
+          );
+          await new Promise((r) => setTimeout(r, 500));
+          const osa = (script: string) =>
+            new Promise<void>((res) => execFile("osascript", ["-e", script], () => res()));
+          const keystroke = (k: string, mods: string) =>
+            osa(`tell application "System Events" to keystroke "${k}" using ${mods} down`);
+          const keycode = (kc: number, mods: string) =>
+            osa(`tell application "System Events" to key code ${kc} using ${mods} down`);
+          // Scenario A (word copy): type GTWORD913, select it with
+          // Shift+Option+Left, Cmd+C; clipboard must contain exactly one copy.
+          clipboard.writeText("");
+          const shell0 = [...ptyManager.ptys.keys()][0];
+          ptyManager.write(shell0, "GTWORD913");
+          await new Promise((r) => setTimeout(r, 700));
+          // Select the word via a real mouse double-click is position-dependent;
+          // select programmatically (word at end of the typed text), then copy
+          // with a REAL keystroke — the part that was broken for Roger.
+          await q(
+            "(() => { const h = [...window.__GT_PANES.values()][0]; const s = h.getSelectedText(); return 'pre=' + (s ? s.length : 0); })()",
+          );
+          // word-select via handle API (selectLine fallback covers the test's goal:
+          // a bounded selection, then the REAL Cmd+C keystroke must copy it)
+          await q(
+            "(() => { const h = [...window.__GT_PANES.values()][0]; h.selectAll(); return 'ok'; })()",
+          );
+          await keystroke("c", "command");
+          await new Promise((r) => setTimeout(r, 400));
+          const wordCopied = clipboard.readText();
+          const countIn = (s: string) => s.split("GTWORD913").length - 1;
+          results.push(
+            "word-copy: " +
+              (countIn(wordCopied) === 1
+                ? "PASS (" + JSON.stringify(wordCopied) + ")"
+                : "FAIL (" + countIn(wordCopied) + " copies: " + JSON.stringify(wordCopied.slice(0, 60)) + ")"),
+          );
+          // Scenario B (exact paste): Ctrl+U, Cmd+V; the shell must receive
+          // exactly one word (no doubling).
+          ptyManager.write(shell0, "\u0015");
+          await new Promise((r) => setTimeout(r, 300));
+          clipboard.writeText("GTWORD913");
+          await keystroke("v", "command");
+          await new Promise((r) => setTimeout(r, 600));
+          const occurrences = await q(
+            "(document.querySelector('.pane.active .xterm-rows')?.innerText.match(/GTWORD913/g) || []).length",
+          );
+          results.push(
+            "paste-count: " + (Number(occurrences) === 1 ? "PASS (exactly one)" : "FAIL (" + occurrences + " occurrences)"),
+          );
+        }
+
+        // 11. REAL mouse drag-select + real Cmd+C: Roger's exact failing flow.
+        // Uses the second tab (single pane) so split panes cannot pollute it.
+        if (process.env.GT_REALKEYS) {
+          await q("document.querySelectorAll('.tab')[1]?.click()");
+          await new Promise((r) => setTimeout(r, 800));
+          const { execFile: ef2 } = await import("node:child_process");
+          const keystroke2 = (k: string, mods: string) =>
+            new Promise<void>((res) =>
+              ef2("osascript", ["-e", `tell application "System Events" to keystroke "${k}" using ${mods} down`], () => res()),
+            );
+          const ptyIds = [...ptyManager.ptys.keys()];
+          const shell0b = ptyIds[ptyIds.length - 1]; // the focused tab's shell
+          ptyManager.write(shell0b, "\u0015");
+          await new Promise((r) => setTimeout(r, 300));
+          ptyManager.write(shell0b, "DRAGWORD555");
+          await new Promise((r) => setTimeout(r, 600));
+          // Where is the word on screen? Ask the renderer for the caret row's rect.
+          const rect = await q(`(() => {
+            const rows = document.querySelectorAll('.pane.active .xterm-rows > div');
+            let target = null;
+            for (let i = 0; i < rows.length; i++) {
+              if ((rows[i].textContent || '').includes('DRAGWORD555')) { target = rows[i]; break; }
+            }
+            if (!target) return JSON.stringify({ x: -1, y: -1, w: 0 });
+            const r = target.getBoundingClientRect();
+            return JSON.stringify({ x: r.x, y: r.y + r.height / 2, w: r.width });
+          })()`);
+          const { x, y, w } = JSON.parse(rect);
+          // Drag across the first ~11 cells (the word) using REAL renderer mouse events.
+          clipboard.writeText("");
+          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x + 2), y: Math.round(y), button: "left", clickCount: 1 });
+          for (let dx = 2; dx <= 150; dx += 6) {
+            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x + dx), y: Math.round(y), button: "left" });
+          }
+          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x + 150), y: Math.round(y), button: "left" });
+          await new Promise((r) => setTimeout(r, 400));
+          const selNow = await q(
+            "(() => { const es = [...window.__GT_PANES.entries()]; const ts = window.__GT_SEL_TS || {}; return es.map(([id, h]) => id + ':' + (h.hasSelection() ? 'SEL@' + ((ts.get && ts.get(id)) || 0) : '-')).join(' '); })()",
+          );
+          // REAL Cmd+C keystroke.
+          await keystroke2("c", "command");
+          await new Promise((r) => setTimeout(r, 600));
+          const dragCopied = clipboard.readText();
+          await keystroke2("c", "command"); // second press (users press again)
+          const copies = dragCopied.split("DRAGWORD555").length - 1;
+          results.push(
+            "drag-copy: " +
+              (copies === 1
+                ? "PASS (" + JSON.stringify(dragCopied) + ")"
+                : "FAIL sel=" + selNow + " copies=" + copies + " clip=" + JSON.stringify(dragCopied.slice(0, 40))),
+          );
+        }
+
         console.log("GT_VERIFY " + results.join(" | "));
         app.exit(results.some((r) => r.includes("FAIL")) ? 1 : 0);
       } catch (e) {

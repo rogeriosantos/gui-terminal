@@ -156,7 +156,21 @@ export function App() {
       const tabKey = activeRef.current;
       const tab = tabsRef.current.find((t) => t.key === tabKey);
       if (!tab) return;
-      const h = handles.current.get(tab.focusedPane);
+      let h = handles.current.get(tab.focusedPane);
+      // Copy targets the pane with the FRESHEST selection, not keyboard focus:
+      // after a split, focus sits in the newest pane while the user drags in
+      // another. Falling back to "any selection" can grab a stale one; the
+      // timestamp picks the one the user actually made.
+      if (action === "copy") {
+        const tsMap = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+        let best: { id: number; ts: number } | null = null;
+        for (const paneId of leafIds(tab.panes)) {
+          const cand = handles.current.get(paneId);
+          const ts = tsMap?.get(paneId) ?? 0;
+          if (cand?.hasSelection() && ts > (best?.ts ?? 0)) best = { id: paneId, ts };
+        }
+        if (best) h = handles.current.get(best.id) ?? h;
+      }
       if (!h) return;
       if (action === "copy") h.copy();
       else if (action === "paste") h.paste();
