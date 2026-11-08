@@ -67,4 +67,28 @@ await Bun.build({
   external: ["electron"],
 });
 
+// electron-builder's cross-arch runs rebuild node-pty in place for the TARGET
+// arch, clobbering the host-arch binary. Restore the host build whenever the
+// installed one does not match this machine.
+const hostArch = process.arch === "arm64" ? "arm64" : "x64";
+const ptyNode = "node_modules/node-pty/build/Release/pty.node";
+if (await Bun.file(ptyNode).exists()) {
+  // Mach-O CPU type at offset 4: arm64 = 0x0100000C, x86_64 = 0x01000007.
+  const bytes = new Uint8Array(await Bun.file(ptyNode).slice(4, 8).arrayBuffer());
+  const cpuType = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+  const fileArch = cpuType === 0x0100000c ? "arm64" : cpuType === 0x01000007 ? "x64" : "other";
+  if (fileArch !== hostArch) {
+    console.log(`node-pty is ${fileArch}, rebuilding for ${hostArch} (host)...`);
+    const proc = Bun.spawnSync({
+      cmd: [
+        "sh", "-c",
+        "cd node_modules/node-pty && npx node-gyp rebuild --runtime=electron --target=39.8.10 --dist-url=https://electronjs.org/headers",
+      ],
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if (proc.exitCode !== 0) process.exit(1);
+  }
+}
+
 console.log("build ok:", js, css ?? "(no css)");

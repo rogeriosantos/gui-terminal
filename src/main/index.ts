@@ -10,6 +10,17 @@ const ptyManager = new PtyManager();
 
 let mainWindow: BrowserWindow | null = null;
 
+/** Send to the window if it still exists; a destroyed webContents throws. */
+function sendToWindow(channel: string, ...args: unknown[]) {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.send(channel, ...args);
+  } catch {
+    // window destroyed between the check and the send
+  }
+}
+
 function findBin(name: string): string | null {
   const paths = (process.env.PATH || "").split(path.delimiter);
   for (const dir of paths) {
@@ -60,6 +71,13 @@ const createWindow = () => {
   });
   win.loadFile(path.join(app.getAppPath(), "dist", "index.html"));
   win.once("ready-to-show", () => win.show());
+  // Shells live with the window: when it closes, reap every PTY so nothing
+  // streams into a destroyed renderer (crash source).
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+    ptyManager.killAll();
+  });
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     electronShell.openExternal(url);
     return { action: "deny" };
@@ -215,6 +233,21 @@ const createWindow = () => {
       }
     }, 5000);
   }
+  // Crash regression hook: stream output then close the window mid-stream.
+  if (process.env.GT_CRASHTEST) {
+    setTimeout(() => {
+      const first = [...ptyManager.ptys.keys()][0];
+      if (first !== undefined) ptyManager.write(first, "yes | head -200000\n");
+      setTimeout(() => {
+        console.log("CRASHTEST closing window mid-stream");
+        win.close();
+        setTimeout(() => {
+          console.log("CRASHTEST survived:", !win.isDestroyed(), "app still alive");
+          app.exit(0);
+        }, 1500);
+      }, 400);
+    }, 4000);
+  }
   return win;
 };
 
@@ -222,7 +255,7 @@ app.whenReady().then(() => {
   createWindow();
 
   const isMac = os.platform() === "darwin";
-  const send = (channel: string) => () => mainWindow?.webContents.send(channel);
+  const send = (channel: string) => () => sendToWindow(channel);
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: "appMenu" as const }] : []),
     {
@@ -389,8 +422,8 @@ ipcMain.handle("state:save", (_e, state: unknown) =>
   fs.writeFile(statePath(), JSON.stringify(state), "utf8"),
 );
 
-ptyManager.on("data", (id, data) => mainWindow?.webContents.send("pty:data", { id, data }));
-ptyManager.on("exit", (id, exitCode) => mainWindow?.webContents.send("pty:exit", { id, exitCode }));
+ptyManager.on("data", (id, data) => sendToWindow("pty:data", { id, data }));
+ptyManager.on("exit", (id, exitCode) => sendToWindow("pty:exit", { id, exitCode }));
 
 // expose platform to renderer via handles
 ipcMain.handle("app:info", () => ({ platform: os.platform(), version: app.getVersion() }));
