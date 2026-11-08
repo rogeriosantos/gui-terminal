@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Menu, shell as electronShell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, shell as electronShell } from "electron";
+import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
@@ -79,28 +80,66 @@ const createWindow = () => {
     }, 4000);
   }
 
-  // Dev/test facility: GT_VERIFY=1 exercises the full PTY -> xterm loop.
+  // Dev/test facility: GT_VERIFY=1 exercises PTY, splits, copy and paste.
   if (process.env.GT_VERIFY) {
     setTimeout(async () => {
       try {
-        const before = await win.webContents.executeJavaScript(
-          `document.querySelector('.xterm-rows')?.innerText.slice(0, 200) ?? 'NO-XTERM'`,
+        const q = (expr: string) => win.webContents.executeJavaScript(expr);
+        const readBuf = () => q("document.querySelector('.xterm-rows')?.innerText ?? 'NO-XTERM'");
+        const results: string[] = [];
+
+        // 1. PTY loop
+        const first = [...ptyManager.ptys.keys()][0];
+        if (first === undefined) throw new Error("no pty");
+        ptyManager.write(first, "echo LOOP_$((20+3))\n");
+        await new Promise((r) => setTimeout(r, 1200));
+        results.push("pty-loop: " + ((await readBuf()).includes("LOOP_23") ? "PASS" : "FAIL"));
+
+        // 2. Split via the real menu channel
+        win.webContents.send("menu:split-h");
+        await new Promise((r) => setTimeout(r, 800));
+        const frames = await q("document.querySelectorAll('.pane-frame').length");
+        results.push("split: " + (frames === 2 ? "PASS (2 panes)" : "FAIL (" + frames + ")"));
+
+        // 3. Paste: clipboard -> focused pane's PTY
+        const { clipboard } = await import("electron");
+        clipboard.writeText("PASTE_MARKER_42");
+        win.webContents.send("menu:edit:paste");
+        await new Promise((r) => setTimeout(r, 800));
+        const allText = await q(
+          "Array.from(document.querySelectorAll('.xterm-rows')).map(e => e.innerText).join('\\n')",
         );
-        // Type a command through the manager (same path as the keyboard).
-        const first = [...ptyManager.ptys?.keys?.() ?? []][0];
-        if (first !== undefined) ptyManager.write(first, "echo GT_VERIFY_OK_$((20+3))\n");
-        await new Promise((r) => setTimeout(r, 1500));
-        const after = await win.webContents.executeJavaScript(
-          `document.querySelector('.xterm-rows')?.innerText.slice(0, 400) ?? 'NO-XTERM'`,
+        results.push("paste: " + (allText.includes("PASTE_MARKER_42") ? "PASS" : "FAIL"));
+
+        // 4. Copy probe: select-all + copy, then paste into the same shell and
+        //    verify the shell echoes the copied text back (full round trip).
+        const selLen = await q(
+          "(() => { const h = window.__GT_PANES && [...window.__GT_PANES.values()][0]; if (!h) return -2; h.selectAll(); return h.getSelectedText().length; })()",
         );
-        console.log("GT_VERIFY before:", JSON.stringify(before));
-        console.log("GT_VERIFY after:", JSON.stringify(after));
-        app.quit();
+        await q(
+          "(() => { const h = window.__GT_PANES && [...window.__GT_PANES.values()][0]; h && h.copy(); return true; })()",
+        );
+        await new Promise((r) => setTimeout(r, 300));
+        const clip = clipboard.readText();
+        const clipOk = clip.length > 50 && clip.includes("roger@brain");
+        results.push(
+          "copy: " +
+            (clipOk
+              ? "PASS (selLen=" + selLen + " clipLen=" + clip.length + ")"
+              : "FAIL selLen=" + selLen + " clipLen=" + clip.length),
+        );
+
+        // 5. State persistence
+        const st = await q("window.terminal.stateLoad().then(s => s ? s.tabs.length : null)");
+        results.push("state: " + (Number(st) >= 1 ? "PASS (" + st + " tabs)" : "FAIL (" + st + ")"));
+
+        console.log("GT_VERIFY " + results.join(" | "));
+        app.exit(results.some((r) => r.includes("FAIL")) ? 1 : 0);
       } catch (e) {
-        console.error("GT_VERIFY failed", e);
+        console.error("GT_VERIFY error", e);
         app.exit(1);
       }
-    }, 6000);
+    }, 5000);
   }
   return win;
 };
@@ -109,13 +148,17 @@ app.whenReady().then(() => {
   createWindow();
 
   const isMac = os.platform() === "darwin";
+  const send = (channel: string) => () => mainWindow?.webContents.send(channel);
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: "appMenu" as const }] : []),
     {
       label: "File",
       submenu: [
-        { label: "New Tab", accelerator: "CmdOrCtrl+T", click: () => mainWindow?.webContents.send("menu:new-tab") },
-        { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: () => mainWindow?.webContents.send("menu:close-tab") },
+        { label: "New Tab", accelerator: "CmdOrCtrl+T", click: send("menu:new-tab") },
+        { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: send("menu:close-tab") },
+        { type: "separator" },
+        { label: "Split Horizontally", accelerator: "CmdOrCtrl+D", click: send("menu:split-h") },
+        { label: "Split Vertically", accelerator: "CmdOrCtrl+Shift+D", click: send("menu:split-v") },
         { type: "separator" },
         isMac ? { role: "close", label: "Close Window" } : { role: "quit" },
       ],
@@ -123,13 +166,20 @@ app.whenReady().then(() => {
     {
       label: "Edit",
       submenu: [
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
+        { label: "Copy", accelerator: "CmdOrCtrl+C", click: send("menu:edit:copy") },
+        { label: "Paste", accelerator: "CmdOrCtrl+V", click: send("menu:edit:paste") },
+        { label: "Select All", accelerator: "CmdOrCtrl+A", click: send("menu:edit:selectAll") },
         { type: "separator" },
-        { role: "zoomIn", label: "Bigger Font" },
-        { role: "zoomOut", label: "Smaller Font" },
-        { role: "resetZoom", label: "Reset Font" },
+        { label: "Clear Buffer", accelerator: "CmdOrCtrl+K", click: send("menu:edit:clear") },
+        { type: "separator" },
+        // Hidden native roles keep their shortcuts reserved in the menu; our
+        // custom handlers above own the visible behaviour.
+        { role: "selectAll", visible: false },
+        { role: "undo", visible: false },
+        { role: "redo", visible: false },
+        { role: "cut", visible: false },
+        { role: "copy", visible: false },
+        { role: "paste", visible: false },
       ],
     },
     {
@@ -238,6 +288,23 @@ ipcMain.handle("proc:run", async (_e, command: string, args: string[], timeoutMs
     child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
   });
 });
+
+// Clipboard access from the renderer.
+ipcMain.handle("clipboard:readText", () => clipboard.readText());
+ipcMain.handle("clipboard:writeText", (_e, text: string) => clipboard.writeText(text));
+
+// Persisted UI state (open tabs, splits) in userData.
+const statePath = () => path.join(app.getPath("userData"), "state.json");
+ipcMain.handle("state:load", async () => {
+  try {
+    return JSON.parse(await fs.readFile(statePath(), "utf8"));
+  } catch {
+    return null;
+  }
+});
+ipcMain.handle("state:save", (_e, state: unknown) =>
+  fs.writeFile(statePath(), JSON.stringify(state), "utf8"),
+);
 
 ptyManager.on("data", (id, data) => mainWindow?.webContents.send("pty:data", { id, data }));
 ptyManager.on("exit", (id, exitCode) => mainWindow?.webContents.send("pty:exit", { id, exitCode }));

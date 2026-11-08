@@ -193,9 +193,88 @@ body {
 .pane { position: absolute; inset: 0; padding: 6px 8px 10px; }
 .pane.active { display: block; }
 
+.pane-tree { height: 100%; display: flex; flex-direction: column; }
+.split { display: flex; min-height: 0; min-width: 0; flex: 1; gap: 3px; }
+.split-h { flex-direction: row; }
+.split-v { flex-direction: column; }
+.split > * { flex: 1 1 0; min-width: 0; min-height: 0; }
+
+.pane-frame {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.pane-frame.focused { box-shadow: 0 0 0 1.5px var(--accent); }
+.pane-frame.only { box-shadow: none; }
+
+.pane-bar {
+  height: 26px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.pane-bar.dim { opacity: 0.55; }
+.pane-bar button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  width: 22px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.pane-bar button:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+.pane-bar-title {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-close:hover { color: var(--danger) !important; }
+
+.pane-term { flex: 1; min-height: 0; padding: 4px 6px 6px; }
 .xterm-holder { height: 100%; }
 .xterm .xterm-viewport { background-color: transparent !important; }
 .xterm-screen { user-select: text; cursor: text; }
+
+/* context menu */
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 150px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.ctx-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ctx-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.ctx-menu button:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
 
 /* selection + scrollbars */
 ::selection { background: var(--accent-soft); }

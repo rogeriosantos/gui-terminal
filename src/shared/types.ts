@@ -16,6 +16,26 @@ export interface PtyOutputChunk {
   data: string;
 }
 
+export interface SshHost {
+  host: string;
+  hostname?: string;
+  user?: string;
+}
+
+/** What a restored tab needs to recreate itself. */
+export interface SavedTab {
+  kind: "local" | "ssh";
+  shell: ShellKind;
+  host?: string;
+  paneCount: number;
+  splitDir: "h" | "v";
+}
+
+export interface SavedState {
+  version:  1;
+  tabs: SavedTab[];
+}
+
 /** Invoked from the renderer; implemented in main. */
 export interface TerminalApi {
   listShells(): Promise<{ kind: ShellKind; label: string; available: boolean }[]>;
@@ -28,18 +48,20 @@ export interface TerminalApi {
   kill(id: number): Promise<void>;
   sshHosts(): Promise<SshHost[]>;
   appInfo(): Promise<{ platform: NodeJS.Platform; version: string }>;
+  clipboardReadText(): Promise<string>;
+  clipboardWriteText(text: string): Promise<void>;
+  stateLoad(): Promise<SavedState | null>;
+  stateSave(state: SavedState): Promise<void>;
   onPtyOutput(cb: (chunk: PtyOutputChunk) => void): () => void;
   onPtyExit(cb: (info: { id: number; exitCode: number }) => void): () => void;
   onMenuNewTab(cb: () => void): void;
   onMenuCloseTab(cb: () => void): void;
+  onMenuSplitH(cb: () => void): void;
+  onMenuSplitV(cb: () => void): void;
+  /** action: "copy" | "paste" | "selectAll" | "char" | "line" | "word" | "clear" */
+  onMenuEdit(cb: (action: string) => void): void;
   platform: NodeJS.Platform;
   version: string;
-}
-
-export interface SshHost {
-  host: string;
-  hostname?: string;
-  user?: string;
 }
 
 declare global {

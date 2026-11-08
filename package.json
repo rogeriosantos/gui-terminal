@@ -1,7 +1,7 @@
 {
   "name": "gui-terminal",
   "productName": "GuiTerminal",
-  "version": "0.1.1001",
+  "version": "0.1.1002",
   "description": "A graphical terminal: real terminals (zsh/bash/PowerShell/ssh) with a GUI around them - tabs, sidebar, split panes.",
   "type": "module",
   "main": "dist/main.cjs",
@@ -51,19 +51,29 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ]
     },
     "win": {
-      "target": ["nsis", "zip"]
+      "target": [
+        "nsis",
+        "zip"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "System"
     }
   }
