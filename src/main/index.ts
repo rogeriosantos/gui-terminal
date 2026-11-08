@@ -92,6 +92,7 @@ const createWindow = () => {
         const img = await win.webContents.capturePage();
         require("node:fs").writeFileSync(file, img.toPNG());
         console.log(`screenshot written: ${file}`);
+        // Mouse audit: where do events land on a plain mousedown?
       } catch (e) {
         console.error("screenshot failed", e);
       }
@@ -432,7 +433,7 @@ const createWindow = () => {
             "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.mouseTrackingMode(); })()",
           );
           results.push(
-            "claude-mouse-mode: " + (mouseMode !== "none" ? "PASS (" + mouseMode + ")" : "FAIL (none - claude UI not detected)"),
+            "claude-mouse-mode: " + (mouseMode === "none" ? "PASS (reporting stripped — selection owns the mouse)" : "FAIL (" + mouseMode + " still active)"),
           );
           // Shift+drag across the middle of the visible screen (claude's banner).
           const rect4 = await q(
@@ -440,12 +441,13 @@ const createWindow = () => {
           );
           const { x: x4, y: y4 } = JSON.parse(rect4);
           clipboard.writeText("");
-          // Option+drag = macOS native force-selection (what a real user does).
-          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x4), y: Math.round(y4), button: "left", clickCount: 1, modifiers: ["alt"] });
+          // PLAIN drag (no modifiers) — Roger's exact gesture. With the
+          // mouse-reporting filter, this must select claude's text.
+          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x4), y: Math.round(y4), button: "left", clickCount: 1 });
           for (let dx = 0; dx <= 200; dx += 8) {
-            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x4 + dx), y: Math.round(y4), button: "left", modifiers: ["alt"] });
+            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x4 + dx), y: Math.round(y4), button: "left" });
           }
-          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x4 + 200), y: Math.round(y4), button: "left", modifiers: ["alt"] });
+          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x4 + 200), y: Math.round(y4), button: "left" });
           await new Promise((r) => setTimeout(r, 500));
           const selH4 = await q(
             "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.hasSelection() ? JSON.stringify(h.getSelectedText().slice(0, 50)) : 'NOSEL'; })()",
@@ -467,6 +469,47 @@ const createWindow = () => {
           await new Promise((r) => setTimeout(r, 800));
           await ks4("c", "control down");
           await new Promise((r) => setTimeout(r, 500));
+        }
+
+        // 14. Real codex: same plain-drag + Cmd+C proof.
+        if (process.env.GT_APPTEST && process.env.GT_CODEXTEST) {
+          const { execFile: ef6 } = await import("node:child_process");
+          const ks6 = (k: string, mods: string) =>
+            new Promise<void>((res) =>
+              ef6("osascript", ["-e", mods ? `tell application "System Events" to keystroke "${k}" using ${mods} down` : `tell application "System Events" to keystroke "${k}"`], () => res()),
+            );
+          const enter6 = () =>
+            new Promise<void>((res) =>
+              ef6("osascript", ["-e", 'tell application "System Events" to key code 36'], () => res()),
+            );
+          await new Promise<void>((res) =>
+            ef6("osascript", ["-e", 'tell application "System Events" to set frontmost of process "Electron" to true'], () => res()),
+          );
+          await q("document.querySelector('.tab-new')?.click()");
+          await new Promise((r) => setTimeout(r, 1000));
+          for (const ch of "codex") await ks6(ch, "");
+          await enter6();
+          await new Promise((r) => setTimeout(r, 9000));
+          const mode6 = await q("(() => { const ps = [...window.__GT_PANES.values()]; return ps[ps.length - 1].mouseTrackingMode(); })()");
+          const r6 = await q(
+            "(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); let t = null; for (const d of rows) { const s = d.textContent || ''; if (s.length > 20) t = d; } if (!t) return JSON.stringify({x:-1,y:-1}); const r = t.getBoundingClientRect(); return JSON.stringify({x: r.x + 2, y: r.y + r.height/2}); })()",
+          );
+          const { x: x6, y: y6 } = JSON.parse(r6);
+          clipboard.writeText("");
+          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x6), y: Math.round(y6), button: "left", clickCount: 1 });
+          for (let dx = 0; dx <= 180; dx += 8) {
+            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x6 + dx), y: Math.round(y6), button: "left" });
+          }
+          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x6 + 180), y: Math.round(y6), button: "left" });
+          await new Promise((r) => setTimeout(r, 500));
+          await ks6("c", "command");
+          await new Promise((r) => setTimeout(r, 900));
+          const clip6 = clipboard.readText();
+          results.push(
+            "codex-select-copy: " +
+              (clip6.length > 5 ? "PASS (" + JSON.stringify(clip6.slice(0, 40)) + ")" : "FAIL mode=" + mode6),
+          );
+          await ks6("c", "control down");
         }
 
         console.log("GT_VERIFY " + results.join(" | "));

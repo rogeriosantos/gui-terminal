@@ -5,6 +5,26 @@ import "@xterm/xterm/css/xterm.css";
 
 export type Session = { id: number; pid: number; title: string } | null;
 
+/**
+ * Selection-first mouse policy (Terminal.app / Warp behaviour): mouse-reporting
+ * sequences from the program (claude, codex, vim...) are stripped before xterm
+ * sees them, so a plain drag ALWAYS selects text. Apps that need their mouse
+ * (TUI buttons, wheel) keep working through the keyboard; the emulator owns
+ * the pointer. Multi-mode sequences like "\x1b[?1000;1006h" keep their
+ * non-mouse modes.
+ */
+const MOUSE_MODES = new Set(["1000", "1001", "1002", "1003", "1005", "1006", "1015", "1016"]);
+const CSI_MODE_RE = /\x1b\[\?([0-9;]*)([hl])/g;
+
+export function stripMouseReporting(data: string): string {
+  if (!data.includes("[?")) return data;
+  return data.replace(CSI_MODE_RE, (full: string, params: string, suffix: string) => {
+    const kept = params.split(";").filter((p) => p !== "" && !MOUSE_MODES.has(p));
+    if (kept.length === 0) return "";
+    return "\x1b[?" + kept.join(";") + suffix;
+  });
+}
+
 export interface PaneHandle {
   copy(): void;
   paste(): void;
@@ -297,7 +317,7 @@ export function TerminalPane({
     const writeSub = t.onData((data) => window.terminal.write(s.id, data));
 
     const offOutput = window.terminal.onPtyOutput((chunk) => {
-      if (chunk.id === s.id) t.write(chunk.data);
+      if (chunk.id === s.id) t.write(stripMouseReporting(chunk.data));
     });
     const offExit = window.terminal.onPtyExit((info) => {
       if (info.id === s.id && !reportedExit.current) {
