@@ -335,6 +335,140 @@ const createWindow = () => {
           );
         }
 
+        // 12. Doubling detector: real Cmd+V must deliver exactly one paste.
+        if (process.env.GT_REALKEYS) {
+          const { execFile: ef3 } = await import("node:child_process");
+          const ks3 = (k: string, mods: string) =>
+            new Promise<void>((res) =>
+              ef3("osascript", ["-e", `tell application "System Events" to keystroke "${k}" using ${mods} down`], () => res()),
+            );
+          await q("document.querySelectorAll('.tab')[1]?.click()");
+          await new Promise((r) => setTimeout(r, 700));
+          const ptyIds3 = [...ptyManager.ptys.keys()];
+          const shell3 = ptyIds3[ptyIds3.length - 1];
+          ptyManager.write(shell3, "\u0015");
+          await new Promise((r) => setTimeout(r, 300));
+          clipboard.writeText("DBLCHK888");
+          await ks3("v", "command");
+          await new Promise((r) => setTimeout(r, 800));
+          const dbl = await q(
+            "(document.querySelector('.pane.active .xterm-rows')?.innerText.match(/DBLCHK888/g) || []).length",
+          );
+          results.push(
+            "paste-single: " + (Number(dbl) === 1 ? "PASS (exactly one)" : "FAIL (" + dbl + "x DOUBLED)"),
+          );
+        }
+
+        // 12b. Shift+drag select with mouse reporting ON (plain zsh).
+        if (process.env.GT_REALKEYS) {
+          await q("document.querySelectorAll('.tab')[1]?.click()");
+          await new Promise((r) => setTimeout(r, 700));
+          const pids = [...ptyManager.ptys.keys()];
+          const sh = pids[pids.length - 1];
+          ptyManager.write(sh, "printf '\\e[?1000h\\e[?1006h'");
+          await new Promise((r) => setTimeout(r, 500));
+          ptyManager.write(sh, "echo MOUSEMODE_MARKER_Q7\n");
+          await new Promise((r) => setTimeout(r, 700));
+          const mode = await q("(() => { const ps = [...window.__GT_PANES.values()]; return ps[ps.length-1].mouseTrackingMode(); })()");
+          const r5 = await q("(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); let t = null; for (const d of rows) if ((d.textContent||'').includes('MOUSEMODE_MARKER_Q7')) t = d; if (!t) return JSON.stringify({x:-1,y:-1}); const r = t.getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y + r.height/2}); })()");
+          const { x: mx, y: my } = JSON.parse(r5);
+          clipboard.writeText("");
+          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(mx), y: Math.round(my), button: "left", clickCount: 1, modifiers: ["alt"] });
+          for (let dx = 0; dx <= 150; dx += 8) {
+            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(mx + dx), y: Math.round(my), button: "left", modifiers: ["alt"] });
+          }
+          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(mx + 150), y: Math.round(my), button: "left", modifiers: ["alt"] });
+          await new Promise((r) => setTimeout(r, 500));
+          const selM = await q("(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length-1]; return h.hasSelection() ? JSON.stringify(h.getSelectedText().slice(0,50)) : 'NOSEL'; })()");
+          console.log("SHIFTDRAG mode=" + mode + " sel=" + selM);
+          ptyManager.write(sh, "printf '\\e[?1000l\\e[?1006l'");
+        }
+
+        // 13. Real-app integration: run `claude` via real keystrokes in a new
+        //     tab, then Shift+drag select + real Cmd+C inside its UI.
+        if (process.env.GT_APPTEST) {
+          const { execFile: ef4 } = await import("node:child_process");
+          const ks4 = (k: string, mods: string) =>
+            new Promise<void>((res) =>
+              ef4(
+                "osascript",
+                ["-e", mods ? `tell application "System Events" to keystroke "${k}" using ${mods} down` : `tell application "System Events" to keystroke "${k}"`],
+                () => res(),
+              ),
+            );
+          // Bring the app to the front (keystrokes go to the frontmost app).
+          const { execFile: ef5 } = await import("node:child_process");
+          await new Promise<void>((res) =>
+            ef5("osascript", ["-e", 'tell application "System Events" to set frontmost of process "Electron" to true'], () => res()),
+          );
+          await new Promise((r) => setTimeout(r, 600));
+          // New tab via the UI
+          await q("document.querySelector('.tab-new')?.click()");
+          await new Promise((r) => setTimeout(r, 1200));
+          const ptyIds4 = [...ptyManager.ptys.keys()];
+          const shell4 = ptyIds4[ptyIds4.length - 1];
+          // Type `claude` and Enter through the REAL key path
+          const enter4 = () =>
+            new Promise<void>((res) =>
+              ef4("osascript", ["-e", 'tell application "System Events" to key code 36'], () => res()),
+            );
+          for (const ch of "claude") await ks4(ch, "");
+          await enter4();
+          // Trust dialog: Down to "Yes, I trust this folder", Enter.
+          await new Promise((r) => setTimeout(r, 2500));
+          const kc4 = (code: number) =>
+            new Promise<void>((res) =>
+              ef4("osascript", ["-e", `tell application "System Events" to key code ${code}`], () => res()),
+            );
+          await kc4(125); // down
+          await new Promise((r) => setTimeout(r, 300));
+          await kc4(36); // enter
+          await new Promise((r) => setTimeout(r, 7000)); // claude main UI boots
+          const lastBuf = await q(
+            "(() => { const all = document.querySelectorAll('.xterm-rows'); return all.length + ' terminals; last=' + (all[all.length-1] ? all[all.length-1].innerText.slice(-200) : 'none'); })()",
+          );
+          console.log("CLAUDEBUF:", JSON.stringify(lastBuf));
+          const mouseMode = await q(
+            "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.mouseTrackingMode(); })()",
+          );
+          results.push(
+            "claude-mouse-mode: " + (mouseMode !== "none" ? "PASS (" + mouseMode + ")" : "FAIL (none - claude UI not detected)"),
+          );
+          // Shift+drag across the middle of the visible screen (claude's banner).
+          const rect4 = await q(
+            "(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); let t = null; for (const d of rows) { const s = d.textContent || ''; if (s.includes('Opus') || s.includes('✦')) { t = d; break; } } if (!t && rows.length) t = rows[Math.floor(rows.length/3)]; if (!t) return JSON.stringify({x:-1,y:-1,w:0}); const r = t.getBoundingClientRect(); return JSON.stringify({x: r.x + 2, y: r.y + r.height/2, w: r.width}); })()",
+          );
+          const { x: x4, y: y4 } = JSON.parse(rect4);
+          clipboard.writeText("");
+          // Option+drag = macOS native force-selection (what a real user does).
+          win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x4), y: Math.round(y4), button: "left", clickCount: 1, modifiers: ["alt"] });
+          for (let dx = 0; dx <= 200; dx += 8) {
+            win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x4 + dx), y: Math.round(y4), button: "left", modifiers: ["alt"] });
+          }
+          win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(x4 + 200), y: Math.round(y4), button: "left", modifiers: ["alt"] });
+          await new Promise((r) => setTimeout(r, 500));
+          const selH4 = await q(
+            "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.hasSelection() ? JSON.stringify(h.getSelectedText().slice(0, 50)) : 'NOSEL'; })()",
+          );
+          await ks4("c", "command");
+          await new Promise((r) => setTimeout(r, 1200));
+          const clip4 = clipboard.readText();
+          const claudeSel = await q(
+            "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.hasSelection() ? JSON.stringify(h.getSelectedText().slice(0, 60)) : 'NOSEL'; })()",
+          );
+          results.push(
+            "claude-select-copy: " +
+              (clip4.length > 10 && /opus|✦|claude/i.test(clip4)
+                ? "PASS (" + JSON.stringify(clip4.slice(0, 40)) + ")"
+                : "FAIL paneSel=" + claudeSel + " clip=" + JSON.stringify(clip4.slice(0, 40))),
+          );
+          // quit claude
+          await ks4("c", "control down");
+          await new Promise((r) => setTimeout(r, 800));
+          await ks4("c", "control down");
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
         console.log("GT_VERIFY " + results.join(" | "));
         app.exit(results.some((r) => r.includes("FAIL")) ? 1 : 0);
       } catch (e) {
@@ -383,12 +517,15 @@ app.whenReady().then(() => {
     {
       label: "Edit",
       submenu: [
-        { label: "Copy", accelerator: "CmdOrCtrl+C", click: send("menu:edit:copy") },
-        { label: "Paste", accelerator: "CmdOrCtrl+V", click: send("menu:edit:paste") },
-        { label: "Select All", accelerator: "CmdOrCtrl+A", click: send("menu:edit:selectAll") },
+        // NO accelerators here on purpose: with one, a real keypress fires BOTH
+        // the menu action and xterm's key handler (paste doubled, copy raced
+        // the wrong pane). The terminal's own key handler owns the keyboard;
+        // these items stay clickable from the menu bar.
+        { label: "Copy", click: send("menu:edit:copy") },
+        { label: "Paste", click: send("menu:edit:paste") },
+        { label: "Select All", click: send("menu:edit:selectAll") },
         { type: "separator" },
-        { label: "Clear Buffer", accelerator: "CmdOrCtrl+K", click: send("menu:edit:clear") },
-        { type: "separator" },
+        { label: "Clear Buffer", click: send("menu:edit:clear") },
       ],
     },
     {

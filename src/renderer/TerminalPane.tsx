@@ -211,6 +211,37 @@ export function TerminalPane({
       return true;
     });
 
+    // iTerm2 parity: in mouse-reporting apps, Shift+drag must still select.
+    // xterm's macOS force-selection path is Option+click
+    // (macOptionClickForcesSelection); remap Shift+drag to Option while the
+    // running app tracks the mouse.
+    let remapping = false;
+    const remapShiftDrag = (e: MouseEvent) => {
+      if (!e.shiftKey || e.altKey || e.button !== 0) return;
+      if (e.type === "mousedown") {
+        if (t.modes.mouseTrackingMode === "none") return;
+        remapping = true;
+      } else if (!remapping) return;
+      if (e.type !== "mousedown" && e.type !== "mousemove" && e.type !== "mouseup") return;
+      e.stopImmediatePropagation();
+      {
+        const alt = new MouseEvent(e.type, {
+            bubbles: true, cancelable: true, composed: true,
+            detail: e.detail, view: window,
+            screenX: e.screenX, screenY: e.screenY,
+            clientX: e.clientX, clientY: e.clientY,
+            ctrlKey: e.ctrlKey, shiftKey: false, altKey: true, metaKey: e.metaKey,
+            button: 0, buttons: e.buttons,
+            relatedTarget: e.relatedTarget,
+          });
+          (e.target as Element | null)?.dispatchEvent(alt);
+        if (e.type === "mouseup") remapping = false;
+      }
+    };
+    for (const ty of ["mousedown", "mousemove", "mouseup"] as const) {
+      el.addEventListener(ty, remapShiftDrag, true);
+    }
+
     // Right-click context menu.
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
@@ -245,6 +276,9 @@ export function TerminalPane({
     return () => {
       handles.delete(paneId);
       selSub.dispose();
+      for (const ty of ["mousedown", "mousemove", "mouseup"] as const) {
+        el.removeEventListener(ty, remapShiftDrag, true);
+      }
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("auxclick", onAuxClick);
       el.removeEventListener("mouseup", refreshSel);
