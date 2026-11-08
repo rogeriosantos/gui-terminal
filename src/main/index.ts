@@ -433,16 +433,15 @@ const createWindow = () => {
             "(() => { const ps = [...window.__GT_PANES.values()]; const h = ps[ps.length - 1]; return h.mouseTrackingMode(); })()",
           );
           results.push(
-            "claude-mouse-mode: " + (mouseMode === "none" ? "PASS (reporting stripped — selection owns the mouse)" : "FAIL (" + mouseMode + " still active)"),
+            "claude-mouse-mode: " + (mouseMode !== "none" ? "PASS (" + mouseMode + " - app keeps its mouse)" : "FAIL (none)"),
           );
           // Shift+drag across the middle of the visible screen (claude's banner).
           const rect4 = await q(
-            "(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); let t = null; for (const d of rows) { const s = d.textContent || ''; if (s.includes('Opus') || s.includes('✦')) { t = d; break; } } if (!t && rows.length) t = rows[Math.floor(rows.length/3)]; if (!t) return JSON.stringify({x:-1,y:-1,w:0}); const r = t.getBoundingClientRect(); return JSON.stringify({x: r.x + 2, y: r.y + r.height/2, w: r.width}); })()",
+            "(() => { const rows = document.querySelectorAll('.pane.active .xterm-rows > div'); for (let i = rows.length - 1; i >= 0; i--) { const s = rows[i].textContent || ''; if (s.includes('Opus') || s.includes('✦')) { const r = rows[i].getBoundingClientRect(); return JSON.stringify({x: r.x + 2, y: r.y + r.height/2, w: r.width}); } } return JSON.stringify({x:-1,y:-1,w:0}); })()",
           );
           const { x: x4, y: y4 } = JSON.parse(rect4);
           clipboard.writeText("");
-          // PLAIN drag (no modifiers) — Roger's exact gesture. With the
-          // mouse-reporting filter, this must select claude's text.
+          // PLAIN drag (no modifiers) — Roger's exact gesture.
           win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(x4), y: Math.round(y4), button: "left", clickCount: 1 });
           for (let dx = 0; dx <= 200; dx += 8) {
             win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(x4 + dx), y: Math.round(y4), button: "left" });

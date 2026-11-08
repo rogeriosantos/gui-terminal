@@ -5,25 +5,6 @@ import "@xterm/xterm/css/xterm.css";
 
 export type Session = { id: number; pid: number; title: string } | null;
 
-/**
- * Selection-first mouse policy (Terminal.app / Warp behaviour): mouse-reporting
- * sequences from the program (claude, codex, vim...) are stripped before xterm
- * sees them, so a plain drag ALWAYS selects text. Apps that need their mouse
- * (TUI buttons, wheel) keep working through the keyboard; the emulator owns
- * the pointer. Multi-mode sequences like "\x1b[?1000;1006h" keep their
- * non-mouse modes.
- */
-const MOUSE_MODES = new Set(["1000", "1001", "1002", "1003", "1005", "1006", "1015", "1016"]);
-const CSI_MODE_RE = /\x1b\[\?([0-9;]*)([hl])/g;
-
-export function stripMouseReporting(data: string): string {
-  if (!data.includes("[?")) return data;
-  return data.replace(CSI_MODE_RE, (full: string, params: string, suffix: string) => {
-    const kept = params.split(";").filter((p) => p !== "" && !MOUSE_MODES.has(p));
-    if (kept.length === 0) return "";
-    return "\x1b[?" + kept.join(";") + suffix;
-  });
-}
 
 export interface PaneHandle {
   copy(): void;
@@ -231,36 +212,109 @@ export function TerminalPane({
       return true;
     });
 
-    // iTerm2 parity: in mouse-reporting apps, Shift+drag must still select.
-    // xterm's macOS force-selection path is Option+click
-    // (macOptionClickForcesSelection); remap Shift+drag to Option while the
-    // running app tracks the mouse.
-    let remapping = false;
-    const remapShiftDrag = (e: MouseEvent) => {
-      if (!e.shiftKey || e.altKey || e.button !== 0) return;
-      if (e.type === "mousedown") {
-        if (t.modes.mouseTrackingMode === "none") return;
-        remapping = true;
-      } else if (!remapping) return;
-      if (e.type !== "mousedown" && e.type !== "mousemove" && e.type !== "mouseup") return;
+    // Termius-style mouse disambiguation: the app keeps its mouse (wheel,
+    // clicks), but a DRAG always becomes a text selection — implemented with
+    // xterm's programmatic select() API so synthetic-event trust never matters.
+    //   mousedown         -> hold the event back (mouse reporting apps)
+    //   move > 4px        -> drag: select from the press cell to the current
+    //                        cell on every move (live feedback)
+    //   mouseup w/o drag  -> click: replay mousedown+up to xterm for the app
+    const DRAG_THRESHOLD = 4;
+    let held: { x: number; y: number; ev: MouseEvent } | null = null;
+    let dragging: boolean = false;
+    let startCell: { x: number; y: number } | null = null;
+
+    const clone = (type: string, e: MouseEvent, over: Partial<MouseEventInit>) =>
+      new MouseEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        detail: e.detail, view: window,
+        screenX: e.screenX, screenY: e.screenY,
+        clientX: e.clientX, clientY: e.clientY,
+        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
+        button: e.button, buttons: e.buttons,
+        relatedTarget: e.relatedTarget,
+        ...over,
+      });
+
+    const cellFromEvent = (e: { clientX: number; clientY: number }) => {
+      const rect = el.getBoundingClientRect();
+      // Use xterm's own cell dimensions: char width from a rendered row.
+      const row = el.querySelector(".xterm-rows > div") as HTMLElement | null;
+      if (!row) return null;
+      const rh = row.getBoundingClientRect();
+      const cellH = rh.height || 15;
+      // approximate cell width via monospace advance: measure one char
+      const span = row.querySelector("span") as HTMLElement | null;
+      let cellW = 8;
+      if (span) {
+        const sr = span.getBoundingClientRect();
+        if (sr.width > 0) cellW = sr.width;
+      }
+      const x = Math.floor((e.clientX - rect.left) / cellW);
+      const y = Math.floor((e.clientY - rect.top) / cellH);
+      if (x < 0 || y < 0 || x >= t.cols) return null;
+      return { x, y };
+    };
+
+    const onMouseDownCapture = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if (t.modes.mouseTrackingMode === "none") return;
+      if (e.shiftKey || e.altKey) return;
+      held = { x: e.clientX, y: e.clientY, ev: e };
       e.stopImmediatePropagation();
-      {
-        const alt = new MouseEvent(e.type, {
-            bubbles: true, cancelable: true, composed: true,
-            detail: e.detail, view: window,
-            screenX: e.screenX, screenY: e.screenY,
-            clientX: e.clientX, clientY: e.clientY,
-            ctrlKey: e.ctrlKey, shiftKey: false, altKey: true, metaKey: e.metaKey,
-            button: 0, buttons: e.buttons,
-            relatedTarget: e.relatedTarget,
-          });
-          (e.target as Element | null)?.dispatchEvent(alt);
-        if (e.type === "mouseup") remapping = false;
+      e.preventDefault();
+    };
+
+    const onMouseMoveCapture = (e: MouseEvent) => {
+      if (!held) return;
+      if (!dragging) {
+        if (Math.hypot(e.clientX - held.x, e.clientY - held.y) < DRAG_THRESHOLD) return;
+        dragging = true;
+        startCell = cellFromEvent({ clientX: held.x, clientY: held.y });
+        if (!startCell) return;
+      }
+      e.stopImmediatePropagation();
+      const end = cellFromEvent(e);
+      if (!end || !startCell) return;
+      // Live selection while dragging.
+      if (startCell.y === end.y) {
+        const [sx, ex] = startCell.x <= end.x ? [startCell.x, end.x] : [end.x, startCell.x];
+        t.select(sx, startCell.y + t.buffer.active.viewportY, ex - sx + 1);
+      } else {
+        const [sy, ey] = startCell.y <= end.y ? [startCell, end] : [end, startCell];
+        t.select(sy.x, sy.y + t.buffer.active.viewportY, (ey.y - sy.y) * t.cols + (ey.x - sy.x) + 1);
       }
     };
-    for (const ty of ["mousedown", "mousemove", "mouseup"] as const) {
-      el.addEventListener(ty, remapShiftDrag, true);
-    }
+
+    const onMouseUpCapture = (e: MouseEvent) => {
+      if (!held) return;
+      const wasDrag = dragging;
+      const h = held;
+      held = null;
+      dragging = false;
+      if (wasDrag) {
+        e.stopImmediatePropagation();
+        // Stamp the selection as fresh for copy routing.
+        const m = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+        m?.set(paneId, Date.now());
+        setHasSel(t.hasSelection());
+        return;
+      }
+      // Plain click: replay to xterm so the app receives it.
+      e.stopImmediatePropagation();
+      (e.target as Element | null)?.dispatchEvent(clone("mousedown", h.ev, {}));
+      (e.target as Element | null)?.dispatchEvent(clone("mouseup", e, {}));
+    };
+
+    const onWheelCapture = (e: WheelEvent) => {
+      if (t.modes.mouseTrackingMode === "none") return;
+      e.stopPropagation();
+    };
+
+    el.addEventListener("mousedown", onMouseDownCapture, true);
+    el.addEventListener("mousemove", onMouseMoveCapture, true);
+    el.addEventListener("mouseup", onMouseUpCapture, true);
+    el.addEventListener("wheel", onWheelCapture, true);
 
     // Right-click context menu.
     const onContextMenu = (e: MouseEvent) => {
@@ -296,9 +350,10 @@ export function TerminalPane({
     return () => {
       handles.delete(paneId);
       selSub.dispose();
-      for (const ty of ["mousedown", "mousemove", "mouseup"] as const) {
-        el.removeEventListener(ty, remapShiftDrag, true);
-      }
+      el.removeEventListener("mousedown", onMouseDownCapture, true);
+      el.removeEventListener("mousemove", onMouseMoveCapture, true);
+      el.removeEventListener("mouseup", onMouseUpCapture, true);
+      el.removeEventListener("wheel", onWheelCapture, true);
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("auxclick", onAuxClick);
       el.removeEventListener("mouseup", refreshSel);
@@ -317,7 +372,7 @@ export function TerminalPane({
     const writeSub = t.onData((data) => window.terminal.write(s.id, data));
 
     const offOutput = window.terminal.onPtyOutput((chunk) => {
-      if (chunk.id === s.id) t.write(stripMouseReporting(chunk.data));
+      if (chunk.id === s.id) t.write(chunk.data);
     });
     const offExit = window.terminal.onPtyExit((info) => {
       if (info.id === s.id && !reportedExit.current) {
