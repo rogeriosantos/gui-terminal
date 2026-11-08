@@ -1,7 +1,7 @@
 {
   "name": "gui-terminal",
   "productName": "GuiTerminal",
-  "version": "0.1.1003",
+  "version": "0.1.1004",
   "description": "A graphical terminal: real terminals (zsh/bash/PowerShell/ssh) with a GUI around them - tabs, sidebar, split panes.",
   "type": "module",
   "main": "dist/main.cjs",

@@ -157,6 +157,56 @@ const createWindow = () => {
         const st = await q("window.terminal.stateLoad().then(s => s ? s.tabs.length : null)");
         results.push("state: " + (Number(st) >= 1 ? "PASS (" + st + " tabs)" : "FAIL (" + st + ")"));
 
+        // 8. REAL keyboard copy: select all, then a genuine Cmd+C key event
+        //    through sendInputEvent (renderer path) and read the clipboard.
+        await q(
+          "window.__GT_PANES ? (([...window.__GT_PANES.values()][0].focus(), [...window.__GT_PANES.values()][0].selectAll())) : 'NO_PANES'",
+        );
+        await new Promise((r) => setTimeout(r, 200));
+        clipboard.writeText(""); // clear
+        win.webContents.sendInputEvent({ type: "keyDown", modifiers: ["command"], keyCode: "c" });
+        win.webContents.sendInputEvent({ type: "keyUp", modifiers: ["command"], keyCode: "c" });
+        await new Promise((r) => setTimeout(r, 500));
+        const clipKey = clipboard.readText();
+        results.push(
+          "key-copy: " + (clipKey.length > 50 ? "PASS (" + clipKey.length + " chars)" : "FAIL (" + clipKey.length + " chars)"),
+        );
+
+        // 9. REAL keyboard paste: clipboard -> pane PTY via Cmd+V
+        clipboard.writeText("KEY_PASTE_77");
+        win.webContents.sendInputEvent({ type: "keyDown", modifiers: ["command"], keyCode: "v" });
+        win.webContents.sendInputEvent({ type: "keyUp", modifiers: ["command"], keyCode: "v" });
+        await new Promise((r) => setTimeout(r, 900));
+        const bufV = await readBuf();
+        results.push("key-paste: " + (bufV.includes("KEY_PASTE_77") ? "PASS" : "FAIL"));
+
+        // KEY PROBE: trace what happens to a real Cmd+C in the real app
+        if (process.env.GT_KEYPROBE) {
+          await q("window.__GT_PANES ? (([...window.__GT_PANES.values()][0].focus(), [...window.__GT_PANES.values()][0].selectAll())) : 'NO_PANES'");
+          await new Promise((r) => setTimeout(r, 200));
+          const selLen2 = await q("window.__GT_PANES ? [...window.__GT_PANES.values()][0].getSelectedText().length : -1");
+          const events = await q(`(async () => {
+            window.__kp_seen = []; const seen = window.__kp_seen;
+            const h = [...window.__GT_PANES.values()][0];
+            // raw listener on the xterm element
+            document.addEventListener('keydown', e => seen.push('doc:' + e.key + (e.metaKey ? '+M' : '')), true);
+            const el = h && (h.element && h.element());
+            return 'listen-ready';
+          })()`);
+          clipboard.writeText("");
+          win.webContents.sendInputEvent({ type: "keyDown", modifiers: ["command"], keyCode: "c" });
+          win.webContents.sendInputEvent({ type: "keyUp", modifiers: ["command"], keyCode: "c" });
+          await new Promise((r) => setTimeout(r, 600));
+          const seenKeys = await q("window.__kp_seen ? window.__kp_seen.join(',') : 'no-listener'");
+          const clipLen = clipboard.readText().length;
+          // also trigger the menu channel directly to test dispatchEdit
+          win.webContents.send("menu:edit:copy");
+          await new Promise((r) => setTimeout(r, 500));
+          const clipMenu = clipboard.readText().length;
+          const xtermSel = await q("window.__GT_PANES ? [...window.__GT_PANES.values()][0].hasSelection() : null");
+          console.log("KEYPROBE sel=" + selLen2 + " seen=" + seenKeys + " clipKey=" + clipLen + " clipMenu=" + clipMenu + " xtermStillSel=" + xtermSel);
+        }
+
         console.log("GT_VERIFY " + results.join(" | "));
         app.exit(results.some((r) => r.includes("FAIL")) ? 1 : 0);
       } catch (e) {
@@ -196,14 +246,6 @@ app.whenReady().then(() => {
         { type: "separator" },
         { label: "Clear Buffer", accelerator: "CmdOrCtrl+K", click: send("menu:edit:clear") },
         { type: "separator" },
-        // Hidden native roles keep their shortcuts reserved in the menu; our
-        // custom handlers above own the visible behaviour.
-        { role: "selectAll", visible: false },
-        { role: "undo", visible: false },
-        { role: "redo", visible: false },
-        { role: "cut", visible: false },
-        { role: "copy", visible: false },
-        { role: "paste", visible: false },
       ],
     },
     {
@@ -262,7 +304,24 @@ ipcMain.handle("pty:create", (_e, shellKind: string, opts?: { host?: string; cwd
   return ptyManager.create(file, args, {
     title,
     cwd: opts?.cwd,
-    env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+    env: {
+      ...process.env,
+      // Finder-launched apps inherit a tiny PATH; fix it so every shell/program
+      // (and posix_spawnp itself) can find binaries.
+      PATH: [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+        process.env.PATH,
+      ]
+        .filter(Boolean)
+        .join(":"),
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    },
   });
 });
 
