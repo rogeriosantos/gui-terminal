@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 
 export type Session = { id: number; pid: number; title: string } | null;
@@ -17,6 +18,9 @@ export interface PaneHandle {
   write(data: string): void;
   /** "none" | "x10" | "vt200" | "drag" | "any" — how the app tracks the mouse. */
   mouseTrackingMode(): string;
+  findNext(q: string): void;
+  findPrev(q: string): void;
+  findHide(): void;
 }
 
 const THEMES = {
@@ -89,7 +93,9 @@ export function TerminalPane({
       macOptionClickForcesSelection: true,
     });
     const f = new FitAddon();
+    const searchAddon = new SearchAddon();
     t.loadAddon(f);
+    t.loadAddon(searchAddon);
     t.open(el);
     try {
       f.fit();
@@ -130,7 +136,17 @@ export function TerminalPane({
         if (s) window.terminal.write(s.id, data);
       },
       mouseTrackingMode: () => term.current?.modes.mouseTrackingMode ?? "none",
+      findNext: (q) => searchAddon.findNext(q),
+      findPrev: (q) => searchAddon.findPrevious(q),
+      findHide: () => searchAddon.clearDecorations(),
     };
+    const resultsSub = searchAddon.onDidChangeResults((ev) => {
+      window.dispatchEvent(
+        new CustomEvent("gt-search-result", {
+          detail: { resultIndex: ev.resultIndex + 1, matchIndex: ev.resultCount },
+        }),
+      );
+    });
     handles.set(paneId, handle);
     // Test/inspection surface (harmless in production).
     (window as unknown as { __GT_PANES?: Map<number, PaneHandle> }).__GT_PANES = handles;
@@ -349,6 +365,7 @@ export function TerminalPane({
 
     return () => {
       handles.delete(paneId);
+      resultsSub.dispose();
       selSub.dispose();
       el.removeEventListener("mousedown", onMouseDownCapture, true);
       el.removeEventListener("mousemove", onMouseMoveCapture, true);

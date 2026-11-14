@@ -547,12 +547,6 @@ app.whenReady().then(() => {
     {
       label: "File",
       submenu: [
-        { label: "New Tab", accelerator: "CmdOrCtrl+T", click: send("menu:new-tab") },
-        { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: send("menu:close-tab") },
-        { type: "separator" },
-        { label: "Split Horizontally", accelerator: "CmdOrCtrl+D", click: send("menu:split-h") },
-        { label: "Split Vertically", accelerator: "CmdOrCtrl+Shift+D", click: send("menu:split-v") },
-        { type: "separator" },
         isMac ? { role: "close", label: "Close Window" } : { role: "quit" },
       ],
     },
@@ -568,6 +562,32 @@ app.whenReady().then(() => {
         { label: "Select All", click: send("menu:edit:selectAll") },
         { type: "separator" },
         { label: "Clear Buffer", click: send("menu:edit:clear") },
+        { label: "Find…", accelerator: "CmdOrCtrl+F", click: send("menu:edit:find") },
+      ],
+    },
+    {
+      label: "Shell",
+      submenu: [
+        { label: "New Tab", accelerator: "CmdOrCtrl+T", click: send("menu:new-tab") },
+        { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: send("menu:close-tab") },
+        { type: "separator" },
+        { label: "Split Right", accelerator: "CmdOrCtrl+D", click: send("menu:split-h") },
+        { label: "Split Down", accelerator: "CmdOrCtrl+Shift+D", click: send("menu:split-v") },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { label: "Next Tab", accelerator: "Ctrl+Tab", click: send("menu:next-tab") },
+        { type: "separator" },
+        ...Array.from({ length: 9 }, (_, i): Electron.MenuItemConstructorOptions => ({
+          label: `Tab ${i + 1}`,
+          accelerator: `CmdOrCtrl+${i + 1}`,
+          click: () => mainWindow?.webContents.send("menu:select-tab", i),
+        })),
+        { type: "separator" },
+        { role: "minimize" as const },
+        { role: "zoom" as const },
       ],
     },
     {

@@ -25,12 +25,26 @@ type Tab = {
 
 let nextTabKey = 1;
 
+const HOST_COLORS = ["#61afef", "#77c07a", "#c678dd", "#e5c07b", "#56b6c2", "#e06c75"];
+function hostColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return HOST_COLORS[h % HOST_COLORS.length];
+}
+function hostInitials(name: string): string {
+  const clean = name.replace(/[^a-zA-Z0-9]/g, " ").trim();
+  const parts = clean.split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return clean.slice(0, 2).toUpperCase();
+}
+
 export function App() {
   const [shells, setShells] = useState<{ kind: string; label: string }[]>([]);
   const [hosts, setHosts] = useState<{ host: string; hostname?: string; user?: string }[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<number | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [search, setSearch] = useState<{ open: boolean; query: string }>({ open: false, query: "" });
 
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -54,25 +68,22 @@ export function App() {
     setTabs((t) => [...t]); // re-render so the pane picks its session up
   }, []);
 
-  const newTab = useCallback(
-    async (shell: ShellKind = "default", host?: string) => {
-      const key = nextTabKey++;
-      const paneId = newPaneId();
-      const tab: Tab = {
-        key,
-        shell,
-        host,
-        kind: host ? "ssh" : "local",
-        title: host ?? "Terminal",
-        panes: { type: "leaf", id: paneId },
-        focusedPane: paneId,
-      };
-      setTabs((t) => [...t, tab]);
-      setActive(key);
-      return tab;
-    },
-    [],
-  );
+  const newTab = useCallback(async (shell: ShellKind = "default", host?: string) => {
+    const key = nextTabKey++;
+    const paneId = newPaneId();
+    const tab: Tab = {
+      key,
+      shell,
+      host,
+      kind: host ? "ssh" : "local",
+      title: host ?? "Terminal",
+      panes: { type: "leaf", id: paneId },
+      focusedPane: paneId,
+    };
+    setTabs((t) => [...t, tab]);
+    setActive(key);
+    return tab;
+  }, []);
 
   const closeTab = useCallback((key: number | null) => {
     if (key === null) return;
@@ -134,15 +145,14 @@ export function App() {
   }, []);
 
   const onExit = useCallback((paneId: number, sessionId: number, code: number) => {
+    void sessionId;
     setTabs((t) => {
       let changed = false;
       const next = t.map((tab) => {
         const paneStillThere = leafIds(tab.panes).includes(paneId);
         if (!paneStillThere) return tab;
         changed = true;
-        return tab.panes.type === "leaf"
-          ? { ...tab, exited: { code } }
-          : { ...tab, exited: { code } }; // mark exited on the tab; pane shows the notice
+        return { ...tab, exited: { code } };
       });
       return changed ? next : t;
     });
@@ -151,34 +161,32 @@ export function App() {
   const activeTab = tabs.find((t) => t.key === active) ?? null;
 
   // Menu-driven edit actions go to the focused pane of the active tab.
-  const dispatchEdit = useCallback(
-    (action: string) => {
-      const tabKey = activeRef.current;
-      const tab = tabsRef.current.find((t) => t.key === tabKey);
-      if (!tab) return;
-      let h = handles.current.get(tab.focusedPane);
-      // Copy targets the pane with the FRESHEST selection, not keyboard focus:
-      // after a split, focus sits in the newest pane while the user drags in
-      // another. Falling back to "any selection" can grab a stale one; the
-      // timestamp picks the one the user actually made.
-      if (action === "copy") {
-        const tsMap = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
-        let best: { id: number; ts: number } | null = null;
-        for (const paneId of leafIds(tab.panes)) {
-          const cand = handles.current.get(paneId);
-          const ts = tsMap?.get(paneId) ?? 0;
-          if (cand?.hasSelection() && ts > (best?.ts ?? 0)) best = { id: paneId, ts };
-        }
-        if (best) h = handles.current.get(best.id) ?? h;
+  const dispatchEdit = useCallback((action: string) => {
+    const tabKey = activeRef.current;
+    const tab = tabsRef.current.find((t) => t.key === tabKey);
+    if (!tab) return;
+    let h = handles.current.get(tab.focusedPane);
+    // Copy targets the pane with the FRESHEST selection, not keyboard focus:
+    // after a split, focus sits in the newest pane while the user drags in
+    // another. Falling back to "any selection" can grab a stale one; the
+    // timestamp picks the one the user actually made.
+    if (action === "copy") {
+      const tsMap = (window as unknown as { __GT_SEL_TS?: Map<number, number> }).__GT_SEL_TS;
+      let best: { id: number; ts: number } | null = null;
+      for (const paneId of leafIds(tab.panes)) {
+        const cand = handles.current.get(paneId);
+        const ts = tsMap?.get(paneId) ?? 0;
+        if (cand?.hasSelection() && ts > (best?.ts ?? 0)) best = { id: paneId, ts };
       }
-      if (!h) return;
-      if (action === "copy") h.copy();
-      else if (action === "paste") h.paste();
-      else if (action === "selectAll") h.selectAll();
-      else if (action === "clear") h.clear();
-    },
-    [],
-  );
+      if (best) h = handles.current.get(best.id) ?? h;
+    }
+    if (!h) return;
+    if (action === "copy") h.copy();
+    else if (action === "paste") h.paste();
+    else if (action === "selectAll") h.selectAll();
+    else if (action === "clear") h.clear();
+    else if (action === "find") setSearch((s) => ({ ...s, open: true }));
+  }, []);
 
   // Boot: menus, hosts, restore-or-fresh tab.
   useEffect(() => {
@@ -189,12 +197,22 @@ export function App() {
     window.terminal.onMenuSplitH(() => splitPane("h"));
     window.terminal.onMenuSplitV(() => splitPane("v"));
     window.terminal.onMenuEdit(dispatchEdit);
+    window.terminal.onMenuSelectTab((n) => {
+      const t = tabsRef.current;
+      if (n >= 0 && n < t.length) setActive(t[n].key);
+    });
+    window.terminal.onMenuNextTab(() => {
+      const t = tabsRef.current;
+      if (!t.length) return;
+      const idx = t.findIndex((x) => x.key === activeRef.current);
+      setActive(t[(idx + 1) % t.length].key);
+    });
     (async () => {
       const saved = await window.terminal.stateLoad();
       let restored = false;
       if (saved?.tabs?.length) {
         for (const st of saved.tabs.slice(0, 12)) {
-          await newTab(st.shell === ("default" satisfies ShellKind) ? "default" : st.shell, st.host);
+          await newTab(st.shell, st.host);
         }
         restored = true;
       }
@@ -203,6 +221,26 @@ export function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Route find-bar events to the focused pane's search addon.
+  useEffect(() => {
+    const pane = () => {
+      const tab = tabsRef.current.find((t) => t.key === activeRef.current);
+      return tab ? handles.current.get(tab.focusedPane) : undefined;
+    };
+    const onSearch = (e: Event) => pane()?.findNext((e as CustomEvent).detail as string);
+    const onNext = () => pane()?.findNext(searchQuery.current);
+    const onPrev = () => pane()?.findPrev(searchQuery.current);
+    window.addEventListener("gt-search", onSearch);
+    window.addEventListener("gt-search-next", onNext);
+    window.addEventListener("gt-search-prev", onPrev);
+    return () => {
+      window.removeEventListener("gt-search", onSearch);
+      window.removeEventListener("gt-search-next", onNext);
+      window.removeEventListener("gt-search-prev", onPrev);
+    };
+  }, []);
+  const searchQuery = useRef("");
 
   // Persist layout (debounced).
   useEffect(() => {
@@ -222,6 +260,10 @@ export function App() {
     return () => clearTimeout(timer);
   }, [tabs]);
 
+  useEffect(() => {
+    searchQuery.current = search.query;
+  }, [search.query]);
+
   const connect = async (host: string) => {
     setConnecting(host);
     await newTab("default", host);
@@ -230,21 +272,23 @@ export function App() {
 
   return (
     <div className="app">
-      <div className="titlebar" />
-      <div className="body">
-        <aside className="sidebar">
-          <div className="sidebar-title">
-            <span className="logo">▚</span> GuiTerminal
-          </div>
+      <aside className="sidebar">
+        <div className="sidebar-title">
+          <span className="logo-mark">▚</span>
+          <span className="logo-name">GuiTerminal</span>
+        </div>
 
+        <div className="side-scroll">
           <div className="section-label">Local</div>
           {shells.map((s) => (
             <button key={s.kind} className="side-item" onClick={() => newTab(s.kind as ShellKind)}>
-              <span className="ico">$</span> {s.label}
+              <span className="side-ico">$</span>
+              <span>{s.label}</span>
+              <span className="side-plus">+</span>
             </button>
           ))}
 
-          <div className="section-label">SSH</div>
+          <div className="section-label section-gap">SSH</div>
           {hosts.length === 0 && <div className="side-hint">No hosts in ~/.ssh/config</div>}
           {hosts.map((h) => (
             <button
@@ -254,32 +298,44 @@ export function App() {
               onClick={() => connect(h.host)}
               title={h.hostname ? `${h.user ? h.user + "@" : ""}${h.hostname}` : h.host}
             >
-              <span className="ico">⇄</span> {h.host}
-              {connecting === h.host ? "…" : ""}
+              <span className="host-badge" style={{ background: hostColor(h.host) }}>
+                {hostInitials(h.host)}
+              </span>
+              <span className="host-name">{h.host}</span>
+              {connecting === h.host ? (
+                <span className="connecting">…</span>
+              ) : (
+                <span className="side-plus">+</span>
+              )}
             </button>
           ))}
+        </div>
 
-          <div className="sidebar-footer">
-            <span className="muted">v{APP_VERSION}</span>
+        <div className="sidebar-footer">
+          <span className="muted">v{APP_VERSION}</span>
+        </div>
+      </aside>
+
+      <main className="main">
+        {tabs.length === 0 ? (
+          <div className="empty">
+            <div className="empty-logo">▚</div>
+            <div className="empty-hint">⌘T new tab · ⌘D split · drag to select · ⌘C copy</div>
           </div>
-        </aside>
-
-        <main className="main">
-          {tabs.length === 0 ? (
-            <div className="empty">
-              <div className="empty-logo">▚</div>
-              <div>Cmd+T for a new tab, or pick a shell / host on the left.</div>
-            </div>
-          ) : (
-            <>
-              <div className="tabbar" style={{ paddingLeft: TABBAR_PAD }}>
-                {tabs.map((t) => (
+        ) : (
+          <>
+            <div className="tabbar">
+              <div className="tabs-scroll" style={{ paddingLeft: TABBAR_PAD }}>
+                {tabs.map((t, i) => (
                   <div
                     key={t.key}
                     className={"tab" + (t.key === active ? " active" : "")}
                     onClick={() => setActive(t.key)}
                   >
-                    <span className={"tab-dot " + (t.kind === "ssh" ? "ssh" : "local")} />
+                    <span
+                      className={"tab-dot " + (t.kind === "ssh" ? "ssh" : "local")}
+                      style={t.kind === "ssh" && t.host ? { background: hostColor(t.host) } : undefined}
+                    />
                     <span className="tab-title">{t.title}</span>
                     {t.exited ? (
                       <span className="tab-exited" title={`exited (${t.exited.code})`}>⨯</span>
@@ -293,44 +349,78 @@ export function App() {
                     >
                       ×
                     </button>
+                    {i < 9 && <span className="tab-num">{i + 1}</span>}
                   </div>
                 ))}
                 <button className="tab-new" title="New Tab (Cmd+T)" onClick={() => newTab()}>
                   +
                 </button>
               </div>
+            </div>
 
-              <div className="panes">
-                {tabs.map((t) => (
-                  <div
-                    key={t.key}
-                    className={"pane" + (t.key === active ? " active" : "")}
-                    // Keep hidden tabs in the layout (visibility, not display)
-                    // so xterm keeps valid glyph metrics; display:none is what
-                    // corrupts the font atlas into "small squares".
-                    style={t.key === active ? undefined : { visibility: "hidden" }}
-                  >
-                    <PaneTree
-                      tab={t}
-                      activeTabKey={active}
-                      getSession={(paneId) => sessions.current.get(paneId) ?? null}
-                      ensureSession={ensurePaneSession}
-                      handles={handles.current}
-                      onFocus={focusPane}
-                      onSplit={splitPane}
-                      onClosePane={closePane}
-                      onExit={onExit}
-                      onTitle={(title) =>
-                        setTabs((ts) => ts.map((x) => (x.key === t.key ? { ...x, title } : x)))
-                      }
-                    />
-                  </div>
-                ))}
+            <div className="panes">
+              {tabs.map((t) => (
+                <div
+                  key={t.key}
+                  className={"pane" + (t.key === active ? " active" : "")}
+                  // Keep hidden tabs in the layout (visibility, not display)
+                  // so xterm keeps valid glyph metrics; display:none is what
+                  // corrupts the font atlas into "small squares".
+                  style={t.key === active ? undefined : { visibility: "hidden" }}
+                >
+                  <PaneTree
+                    tab={t}
+                    activeTabKey={active}
+                    getSession={(paneId) => sessions.current.get(paneId) ?? null}
+                    ensureSession={ensurePaneSession}
+                    handles={handles.current}
+                    onFocus={focusPane}
+                    onSplit={splitPane}
+                    onClosePane={closePane}
+                    onExit={onExit}
+                    onTitle={(title) =>
+                      setTabs((ts) => ts.map((x) => (x.key === t.key ? { ...x, title } : x)))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+
+            {activeTab && (
+              <div className="statusbar">
+                <span className="statusbar-cell">
+                  {leafIds(activeTab.panes).length === 1
+                    ? "1 pane"
+                    : `${leafIds(activeTab.panes).length} panes`}
+                </span>
+                <span className="statusbar-sep" />
+                <span className="statusbar-cell">
+                  {activeTab.kind === "ssh" ? activeTab.host : activeTab.title}
+                </span>
+                <span className="statusbar-sep" />
+                <button
+                  className="statusbar-btn"
+                  onClick={() => setSearch((s) => ({ ...s, open: true }))}
+                >
+                  Find ⌘F
+                </button>
               </div>
-            </>
-          )}
-        </main>
-      </div>
+            )}
+          </>
+        )}
+      </main>
+
+      {search.open && (
+        <SearchBar
+          query={search.query}
+          onChange={(q) => setSearch((s) => ({ ...s, query: q }))}
+          onClose={() => {
+            setSearch({ open: false, query: "" });
+            const tab = tabsRef.current.find((t) => t.key === activeRef.current);
+            if (tab) handles.current.get(tab.focusedPane)?.findHide();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -338,6 +428,86 @@ export function App() {
 declare const APP_VERSION: string;
 const IS_MAC = navigator.userAgent.includes("Mac");
 const TABBAR_PAD = IS_MAC ? 78 : 0;
+
+/** Floating find bar (Cmd+F) — delegates to the focused pane's search addon. */
+function SearchBar({
+  query,
+  onChange,
+  onClose,
+}: {
+  query: string;
+  onChange: (q: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [count, setCount] = useState<{ resultIndex: number; matchIndex: number } | null>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    const onCount = (e: Event) => {
+      const d = (e as CustomEvent).detail as { matchIndex: number; resultIndex: number };
+      setCount({ resultIndex: d.resultIndex, matchIndex: d.matchIndex });
+    };
+    window.addEventListener("gt-search-result", onCount);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("gt-search-result", onCount);
+    };
+  }, [onClose]);
+
+  // Live search as you type (debounced).
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (query) window.dispatchEvent(new CustomEvent("gt-search", { detail: query }));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  return (
+    <div className="find-bar">
+      <span className="find-icon">⌕</span>
+      <input
+        ref={ref}
+        value={query}
+        placeholder="Find in terminal…"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent(e.shiftKey ? "gt-search-prev" : "gt-search-next"));
+          }
+        }}
+      />
+      <span className="find-count">
+        {count ? `${count.resultIndex}/${count.matchIndex}` : query ? "…" : ""}
+      </span>
+      <button
+        className="find-btn"
+        title="Previous (Shift+Enter)"
+        onClick={() => window.dispatchEvent(new CustomEvent("gt-search-prev"))}
+      >
+        ↑
+      </button>
+      <button
+        className="find-btn"
+        title="Next (Enter)"
+        onClick={() => window.dispatchEvent(new CustomEvent("gt-search-next"))}
+      >
+        ↓
+      </button>
+      <button className="find-btn find-close" title="Close (Esc)" onClick={onClose}>
+        ×
+      </button>
+    </div>
+  );
+}
 
 function PaneTree({
   tab,
@@ -382,10 +552,7 @@ function PaneTree({
       );
     }
     return (
-      <div
-        key={"split"}
-        className={"split " + (node.dir === "h" ? "split-h" : "split-v")}
-      >
+      <div key={"split"} className={"split " + (node.dir === "h" ? "split-h" : "split-v")}>
         {node.children.map(render)}
       </div>
     );
@@ -435,8 +602,8 @@ function PaneFrame({
     >
       {!isOnly && (
         <div className={"pane-bar" + (focused || hover ? "" : " dim")}>
-          <button title="Split horizontally (Cmd+D)" onClick={() => { onFocus(tab.key, paneId); onSplit("h"); }}>◫</button>
-          <button title="Split vertically (Cmd+Shift+D)" onClick={() => { onFocus(tab.key, paneId); onSplit("v"); }}>⊟</button>
+          <button title="Split right (Cmd+D)" onClick={() => { onFocus(tab.key, paneId); onSplit("h"); }}>◫</button>
+          <button title="Split down (Cmd+Shift+D)" onClick={() => { onFocus(tab.key, paneId); onSplit("v"); }}>⊟</button>
           <span className="pane-bar-title">{tab.title}</span>
           <button title="Close pane" className="pane-close" onClick={() => onClosePane(paneId)}>×</button>
         </div>

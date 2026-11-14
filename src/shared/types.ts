@@ -60,6 +60,8 @@ export interface TerminalApi {
   onMenuSplitV(cb: () => void): void;
   /** action: "copy" | "paste" | "selectAll" | "char" | "line" | "word" | "clear" */
   onMenuEdit(cb: (action: string) => void): void;
+  onMenuSelectTab(cb: (index: number) => void): void;
+  onMenuNextTab(cb: () => void): void;
   platform: NodeJS.Platform;
   version: string;
 }

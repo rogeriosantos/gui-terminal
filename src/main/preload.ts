@@ -41,6 +41,13 @@ const api: TerminalApi = {
     ipcRenderer.on("menu:edit:paste", () => cb("paste"));
     ipcRenderer.on("menu:edit:selectAll", () => cb("selectAll"));
     ipcRenderer.on("menu:edit:clear", () => cb("clear"));
+    ipcRenderer.on("menu:edit:find", () => cb("find"));
+  },
+  onMenuSelectTab: (cb) => {
+    ipcRenderer.on("menu:select-tab", (_e, n: number) => cb(n));
+  },
+  onMenuNextTab: (cb) => {
+    ipcRenderer.on("menu:next-tab", () => cb());
   },
   platform: process.platform,
   version: "",
